@@ -105,7 +105,7 @@ func (b *Insertion) Insert(s ...string) {
 	}
 }
 
-func (b *Insertion) LoadBackUp(includeCache bool) {
+func (b *Insertion) LoadBackUp() {
 	b.logger.Infof("walk backup %s start", b.config.BackUpPath)
 	err := filepath.Walk(b.config.BackUpPath, func(filepath string, fi os.FileInfo, err error) error {
 		if err != nil {
