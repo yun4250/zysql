@@ -16,8 +16,8 @@ const (
 )
 
 var (
-	dbs       = make(map[string]*sql.DB)
-	storeLock sync.Mutex
+	dbs  = make(map[string]*sql.DB)
+	lock sync.Mutex
 )
 
 //only check once
@@ -27,6 +27,8 @@ type Config struct {
 	DataBase            string
 	DataSourceGenerator func(ip string, port int, database string) string
 	DriverName          string
+	Sql                 string
+	Parser func(s string) ([]interface{}, error)
 
 	MaxInterval  time.Duration
 	MaxBatchSize uint
@@ -59,6 +61,12 @@ func (config *Config) check() error {
 		if config.DataSourceGenerator == nil {
 			return fmt.Errorf("SqlConfig: DataSourceGenerator not set")
 		}
+		if config.Sql == "" {
+			return fmt.Errorf("SqlConfig: Sql not set")
+		}
+		if config.Parser == nil {
+			return fmt.Errorf("SqlConfig: Parser not set")
+		}
 		if config.MaxThreads == 0 {
 			config.MaxThreads = 5
 		}
@@ -88,6 +96,8 @@ func (config *Config) check() error {
 			DataBase:            config.DataBase,
 			DriverName:          config.DriverName,
 			DataSourceGenerator: config.DataSourceGenerator,
+			Sql:                 config.Sql,
+			Parser:              config.Parser,
 			MaxRetry:            config.MaxRetry,
 			MaxInterval:         config.MaxInterval,
 			MaxBatchSize:        config.MaxBatchSize,

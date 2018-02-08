@@ -4,36 +4,48 @@ import (
 	"bufio"
 	"os"
 	"fmt"
-	"sync/atomic"
+	"path/filepath"
 )
 
-type Writer struct {
-	path      string
-	file      *os.File
-	writer    *bufio.Writer
-	semaphore int32
+func OpenWriter(p string, prefix string, no int) *Writer {
+	var suffix string
+	if no > 0 {
+		suffix = fmt.Sprintf("(%d)", no)
+	}
+	path := p + "/" + prefix + suffix + ".dump"
+	var file *os.File
+	if _, e := os.Stat(path); !os.IsNotExist(e) {
+		return OpenWriter(p, prefix, no+1)
+	} else {
+		absPath, _ := filepath.Abs(path)
+		file, _ = os.OpenFile(absPath, os.O_RDWR|os.O_CREATE, 0777)
+		return &Writer{
+			path:   absPath,
+			file:   file,
+			writer: bufio.NewWriter(file),
+		}
+	}
 }
 
-func (w *Writer) Flush(s ...string) <-chan error {
-	atomic.AddInt32(&w.semaphore, 1)
-	c := make(chan error, 1)
-	go func() {
-		defer atomic.AddInt32(&w.semaphore, -1)
-		for _, msg := range s {
-			fmt.Fprintln(w.writer, msg)
-		}
-		c <- w.writer.Flush()
-	}()
-	return c
+type Writer struct {
+	path   string
+	file   *os.File
+	writer *bufio.Writer
+}
+
+func (w *Writer) Flush(s ...string) {
+	for _, msg := range s {
+		w.file.Write([]byte(msg+"\n"))
+		//fmt.Fprintln(w.writer, msg)
+	}
+	//w.writer.Flush()
 }
 
 func (w *Writer) Clear() {
-	for atomic.AddInt32(&w.semaphore, 0) != 0 {}
 	w.file.Close()
 	os.Remove(w.path)
 }
 
 func (w *Writer) Close() {
-	for atomic.AddInt32(&w.semaphore, 0) != 0 {}
 	w.file.Close()
 }

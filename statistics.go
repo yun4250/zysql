@@ -35,19 +35,3 @@ func (s *Statistics) checkAndStart() {
 		}()
 	}
 }
-
-func (s *Statistics) Incr(n int64) {
-	s.checkAndStart()
-	atomic.AddInt64(&s.num, n)
-	atomic.AddInt64(&s.total, n)
-}
-
-func (s *Statistics) Incr1() {
-	s.checkAndStart()
-	atomic.AddInt64(&s.num, 1)
-	atomic.AddInt64(&s.total, 1)
-}
-
-func (s *Statistics) Stop() {
-
-}
