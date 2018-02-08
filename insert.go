@@ -14,17 +14,16 @@ import (
 	"os/signal"
 )
 
-func NewInsertion(logger *zylog.ZyLogger, config Config, sql string, parser func(s string) ([]interface{}, error)) *Insertion {
+func NewInsertion(logger *zylog.ChildLogger, config Config, sql string, parser func(s string) ([]interface{}, error)) *Insertion {
 	defer zylog.CatchAndThrow()
 	config.Sql = sql
 	config.Parser = parser
-	log := logger.GetChild(config.DriverName)
 	if err := config.check(); err != nil {
-		log.Fatal(err)
+		logger.Fatal(err)
 	}
 	b := &Insertion{
 		config: config.config,
-		logger: log,
+		logger: logger,
 		signal: make(chan os.Signal, 1),
 	}
 	go func() {
