@@ -7,15 +7,15 @@ import (
 	"path/filepath"
 )
 
-func OpenWriter(p string, prefix string, no int) *Writer {
+func OpenWriter(p string, prefix string, typ string, no int) *Writer {
 	var suffix string
 	if no > 0 {
 		suffix = fmt.Sprintf("(%d)", no)
 	}
-	path := p + "/" + prefix + suffix + ".dump"
+	path := p + "/" + prefix + suffix + "." + typ
 	var file *os.File
 	if _, e := os.Stat(path); !os.IsNotExist(e) {
-		return OpenWriter(p, prefix, no+1)
+		return OpenWriter(p, prefix, typ, no+1)
 	} else {
 		absPath, _ := filepath.Abs(path)
 		file, _ = os.OpenFile(absPath, os.O_RDWR|os.O_CREATE, 0777)
@@ -35,15 +35,18 @@ type Writer struct {
 
 func (w *Writer) Flush(s ...string) {
 	for _, msg := range s {
-		w.file.Write([]byte(msg+"\n"))
-		//fmt.Fprintln(w.writer, msg)
+		w.file.Write([]byte(msg + "\n"))
 	}
-	//w.writer.Flush()
 }
 
 func (w *Writer) Clear() {
 	w.file.Close()
 	os.Remove(w.path)
+}
+
+func (w *Writer) Rename(p string) {
+	w.file.Close()
+	os.Rename(w.path, p)
 }
 
 func (w *Writer) Close() {

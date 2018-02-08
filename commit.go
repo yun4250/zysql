@@ -7,6 +7,7 @@ import (
 	"sync"
 	"github.com/zyfcn/zyLog"
 	"github.com/satori/go.uuid"
+	"strings"
 )
 
 type commit struct {
@@ -43,15 +44,17 @@ func (c *commit) commitWithRetry(uuid string, cacheBackUp *Writer, retry int, ca
 				c.commitWithRetry(uuid, cacheBackUp, retry, cache, sql, parser)
 			} else {
 				<-c.thread
-				c.logger.Tracef("%s commit: failed %d times, dropping", uuid, retry)
+				c.logger.Errorf("%s commit: failed %d times, dropping", uuid, retry)
 				if c.config.BackUpLevel == DiskBackUp {
-					writer := OpenWriter(c.config.BackUpPath, c.config.BackUpFilePrefix+"_"+c.uuid, 0)
-					c.logger.Tracef("%s commit: backup in %s", uuid, writer.path)
+					writer := OpenWriter(c.config.BackUpPath, c.config.BackUpFilePrefix+"_"+c.uuid, "dump", 0)
+					c.logger.Infof("%s commit: backup in %s", uuid, writer.path)
 					writer.Flush(cache...)
 					writer.Close()
+				} else if c.config.BackUpLevel == CacheBackUp {
+					cacheBackUp.Rename(strings.Replace(cacheBackUp.path, ".cache", ".dump", -1))
 				}
 			}
-		} else if c.config.BackUpLevel == CacheBackUp && cacheBackUp != nil {
+		} else if c.config.BackUpLevel == CacheBackUp {
 			c.logger.Tracef("%s cache clear backup %s", uuid, cacheBackUp.path)
 			cacheBackUp.Clear()
 		}
@@ -93,7 +96,7 @@ func (c *commit) Commit() {
 		copy(cache, c.cache)
 		c.cache = []string{}
 		c.thread <- 1
-		c.logger.Tracef("%s commit: submit %d, current threads %d", c.uuid, len(cache), len(c.thread))
+		c.logger.Debugf("%s commit: submit %d, current threads %d", c.uuid, len(cache), len(c.thread))
 		go c.commitWithRetry(c.uuid, c.backup, 1, cache, c.config.Sql, c.config.Parser)
 	} else {
 		c.logger.Tracef("%s commit: empty", c.uuid)
@@ -135,7 +138,7 @@ func (c *commit) Insert(s ...string) {
 
 	if c.config.BackUpLevel == CacheBackUp {
 		if c.backup == nil {
-			writer := OpenWriter(c.config.BackUpPath, c.config.BackUpFilePrefix+"_"+c.uuid, 0)
+			writer := OpenWriter(c.config.BackUpPath, c.config.BackUpFilePrefix+"_"+c.uuid, "cache", 0)
 			c.backup = writer
 			c.logger.Tracef("%s cache open backup %s", c.uuid, c.backup.path)
 		}

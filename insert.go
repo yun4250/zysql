@@ -18,18 +18,18 @@ func NewInsertion(logger *zylog.ZyLogger, config Config, sql string, parser func
 	defer zylog.CatchAndThrow()
 	config.Sql = sql
 	config.Parser = parser
-	log := logger.GetChild("zysql")
+	log := logger.GetChild(config.DriverName)
 	if err := config.check(); err != nil {
 		log.Fatal(err)
 	}
 	b := &Insertion{
 		config: config.config,
 		logger: log,
+		signal: make(chan os.Signal, 1),
 	}
-	go func(){
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
-		<-sig
+	go func() {
+		signal.Notify(b.signal, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
+		<-b.signal
 		b.Close()
 	}()
 	return b
@@ -39,18 +39,24 @@ type Insertion struct {
 	index     int
 	committer []*commit
 	logger    *zylog.ChildLogger
+	signal    chan os.Signal
 
 	config *Config
 	sync.Mutex
 }
 
-func (i *Insertion) Close() {
+func (i *Insertion) close() {
 	i.Lock()
 	defer i.Unlock()
 	for _, v := range i.committer {
 		v.Close()
 	}
-	i.logger.Infof("all down")
+	i.committer = []*commit{}
+	i.logger.Infof("insertion closed")
+}
+
+func (i *Insertion) Close() {
+	i.signal <- os.Kill
 }
 
 func (b *Insertion) init() {
@@ -99,7 +105,7 @@ func (b *Insertion) Insert(s ...string) {
 	}
 }
 
-func (b *Insertion) LoadBackUp() {
+func (b *Insertion) LoadBackUp(includeCache bool) {
 	b.logger.Infof("walk backup %s start", b.config.BackUpPath)
 	err := filepath.Walk(b.config.BackUpPath, func(filepath string, fi os.FileInfo, err error) error {
 		if err != nil {
@@ -107,7 +113,7 @@ func (b *Insertion) LoadBackUp() {
 			return err
 		}
 		if start, end := strings.Index(fi.Name(), b.config.BackUpFilePrefix+"_"), strings.Index(fi.Name(), ".dump"); start != -1 && end != -1 {
-			b.logger.Tracef("backup: find %s, start", filepath)
+			b.logger.Infof("backup: find %s, start", filepath)
 			file, _ := os.Open(filepath)
 			buf := bufio.NewReader(file)
 			for {
