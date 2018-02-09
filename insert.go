@@ -76,8 +76,19 @@ func (b *Insertion) init() error {
 		for _, ip := range b.config.Ip {
 			key := fmt.Sprintf("%s-%s:%d-%s", b.config.DriverName, ip, b.config.Port, b.config.DataBase)
 			var db *sql.DB
-			if v, ok := dbs[key]; ok {
-				db = v
+			if v, ok := dbs[key]; ok{
+				if err := v.Ping(); err == nil {
+					db = v
+				}else{
+					host := b.config.DataSourceGenerator(ip, b.config.Port, b.config.DataBase)
+					if connect, err := sql.Open(b.config.DriverName, host); err != nil {
+						b.logger.Errorf("fail to open DB: %s - %s", host, err.Error())
+						continue
+					} else {
+						dbs[key] = connect
+						db = connect
+					}
+				}
 			} else {
 				host := b.config.DataSourceGenerator(ip, b.config.Port, b.config.DataBase)
 				if connect, err := sql.Open(b.config.DriverName, host); err != nil {
