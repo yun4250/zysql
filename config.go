@@ -41,6 +41,7 @@ type Config struct {
 
 	WaitForOsKill      bool
 	MinAliveConnection int
+	CommitFailCallBack func(interface{})
 
 	EnableStatistics bool
 

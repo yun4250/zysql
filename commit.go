@@ -47,6 +47,9 @@ func (c *commit) commitWithRetry(uuid string, cacheBackUp *Writer, retry int, ca
 				c.commitWithRetry(uuid, cacheBackUp, retry, cache, insertSql, parser)
 			} else {
 				<-c.thread
+				if c.config.CommitFailCallBack != nil {
+					c.config.CommitFailCallBack(err)
+				}
 				c.logger.Errorf("%s commit: failed %d times, dropping", uuid, retry)
 				if c.config.BackUpLevel == DiskBackUp {
 					writer := OpenWriter(c.config.BackUpPath, c.config.BackUpFilePrefix+"_"+c.uuid, "dump", 0)
