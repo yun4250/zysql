@@ -19,7 +19,7 @@ import (
 
 var ErrLessConnection = errors.New("reach MinAliveConnection")
 
-func NewInsertion(logger *zylog.ChildLogger, config Config, sql string, parser func(s string) ([]interface{}, error)) (*Insertion, error) {
+func NewInsertion(logger *zylog.ZyLogger, config Config, sql string, parser func(s string) ([]interface{}, error)) (*Insertion, error) {
 	config.Sql = sql
 	config.Parser = parser
 	if err := config.check(); err != nil {
@@ -27,7 +27,7 @@ func NewInsertion(logger *zylog.ChildLogger, config Config, sql string, parser f
 	}
 	b := &Insertion{
 		config: config.config,
-		logger: logger,
+		logger: logger.GetChild("insertion"),
 	}
 	if b.config.WaitForOsKill {
 		b.signal = make(chan os.Signal, 1)
