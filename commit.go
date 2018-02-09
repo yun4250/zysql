@@ -12,7 +12,7 @@ import (
 )
 
 type commit struct {
-	ip    string
+	delay time.Duration
 	db    *sql.DB
 	close bool
 
@@ -138,7 +138,7 @@ func (c *commit) Insert(s ...string) bool {
 		c.timer = time.NewTimer(c.config.MaxInterval)
 		go func() {
 			defer c.logger.Info("timer exit")
-			time.Sleep(c.config.MaxInterval)
+			time.Sleep(c.delay)
 			for !c.close {
 				select {
 				case <-c.timer.C:

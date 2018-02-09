@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"errors"
 	"math/rand"
+	"time"
 )
 
 var ErrLessConnection = errors.New("reach MinAliveConnection")
@@ -94,7 +95,7 @@ func (b *Insertion) init() error {
 				continue
 			}
 			c := &commit{
-				ip:     ip,
+				delay:  time.Duration(b.config.MaxInterval.Nanoseconds() / int64(len(b.config.Ip)) * int64((len(b.committer))-1)),
 				db:     db,
 				config: b.config,
 				logger: b.logger.Position(ip),
