@@ -39,6 +39,9 @@ type Config struct {
 	BackUpPath       string
 	BackUpFilePrefix string
 
+	WaitForOsKill      bool
+	MinAliveConnection int
+
 	EnableStatistics bool
 
 	config *Config
@@ -100,11 +103,13 @@ func (config *Config) check() error {
 			Parser:              config.Parser,
 			MaxRetry:            config.MaxRetry,
 			MaxInterval:         config.MaxInterval,
+			MinAliveConnection:  config.MinAliveConnection,
 			MaxBatchSize:        config.MaxBatchSize,
 			MaxThreads:          config.MaxThreads,
 			BackUpLevel:         config.BackUpLevel,
 			BackUpPath:          config.BackUpPath,
 			BackUpFilePrefix:    config.BackUpFilePrefix,
+			WaitForOsKill:       config.WaitForOsKill,
 			EnableStatistics:    config.EnableStatistics,
 		}
 	}

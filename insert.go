@@ -12,26 +12,31 @@ import (
 	"database/sql"
 	"syscall"
 	"os/signal"
+	"errors"
+	"math/rand"
 )
 
-func NewInsertion(logger *zylog.ChildLogger, config Config, sql string, parser func(s string) ([]interface{}, error)) *Insertion {
-	defer zylog.CatchAndThrow()
+var ErrLessConnection = errors.New("reach MinAliveConnection")
+
+func NewInsertion(logger *zylog.ChildLogger, config Config, sql string, parser func(s string) ([]interface{}, error)) (*Insertion, error) {
 	config.Sql = sql
 	config.Parser = parser
 	if err := config.check(); err != nil {
-		logger.Fatal(err)
+		return nil, err
 	}
 	b := &Insertion{
 		config: config.config,
 		logger: logger,
-		signal: make(chan os.Signal, 1),
 	}
-	go func() {
+	if b.config.WaitForOsKill {
+		b.signal = make(chan os.Signal, 1)
 		signal.Notify(b.signal, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
-		<-b.signal
-		b.Close()
-	}()
-	return b
+		go func(bb *Insertion) {
+			<-bb.signal
+			bb.close()
+		}(b)
+	}
+	return b, nil
 }
 
 type Insertion struct {
@@ -44,21 +49,26 @@ type Insertion struct {
 	sync.Mutex
 }
 
+func (i *Insertion) Close() {
+	if i.signal != nil {
+		i.signal <- os.Kill
+	} else {
+		i.close()
+	}
+}
+
 func (i *Insertion) close() {
 	i.Lock()
 	defer i.Unlock()
+	i.logger.Infof("insertion closing %d", len(i.committer))
 	for _, v := range i.committer {
 		v.Close()
 	}
-	i.committer = []*commit{}
+	i.committer = nil
 	i.logger.Infof("insertion closed")
 }
 
-func (i *Insertion) Close() {
-	i.signal <- os.Kill
-}
-
-func (b *Insertion) init() {
+func (b *Insertion) init() error {
 	if b.committer == nil {
 		b.committer = []*commit{}
 		lock.Lock()
@@ -84,34 +94,75 @@ func (b *Insertion) init() {
 				continue
 			}
 			c := &commit{
+				ip:     ip,
 				db:     db,
 				config: b.config,
 				logger: b.logger.Position(ip),
 			}
 			b.committer = append(b.committer, c)
 		}
+		if len(b.committer) <= b.config.MinAliveConnection {
+			return ErrLessConnection
+		}
 		lock.Unlock()
 	}
+	return nil
 }
 
-func (b *Insertion) Insert(s ...string) {
+func (b *Insertion) Insert(s ...string) error {
 	b.Lock()
 	defer b.Unlock()
-	b.init()
-	for _, ss := range s {
-		b.index = (b.index + 1) % len(b.committer)
-		b.committer[b.index].Insert(ss)
+	if err := b.init(); err != nil {
+		return err
+	}
+	for i, ss := range s {
+		for !b.next().Insert(ss) {
+			b.logger.Errorf("committer: %d already closed")
+			if err := b.CleanDied(); err != nil {
+				writer := OpenWriter(b.config.BackUpPath, b.config.BackUpFilePrefix+"_"+fmt.Sprintf("%d", rand.Int()), "dump", 0)
+				b.logger.Infof("backup: save died msg in %s", writer.path)
+				writer.Flush(s[i:]...)
+				writer.Close()
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (b *Insertion) CleanDied() error {
+	b.index = 0
+	alive := []*commit{}
+	for _, v := range b.committer {
+		if v.Alive() {
+			alive = append(alive, v)
+		}
+	}
+	if len(alive) <= b.config.MinAliveConnection {
+		return ErrLessConnection
+	} else {
+		b.committer = alive
+		return nil
 	}
 }
 
-func (b *Insertion) LoadBackUp() {
+func (b *Insertion) next() *commit {
+	b.index = (b.index + 1) % len(b.committer)
+	return b.committer[b.index]
+}
+
+func (b *Insertion) LoadBackUp(includeCache bool) {
 	b.logger.Infof("walk backup %s start", b.config.BackUpPath)
 	err := filepath.Walk(b.config.BackUpPath, func(filepath string, fi os.FileInfo, err error) error {
 		if err != nil {
 			b.logger.Tracef("walk backup: error %s", err.Error())
 			return err
 		}
-		if start, end := strings.Index(fi.Name(), b.config.BackUpFilePrefix+"_"), strings.Index(fi.Name(), ".dump"); start != -1 && end != -1 {
+		if start, end, cache :=
+			strings.Index(fi.Name(), b.config.BackUpFilePrefix+"_"),
+			strings.Index(fi.Name(), ".dump"),
+			strings.Index(fi.Name(), ".cache");
+			start != -1 && end != -1 || (includeCache && cache != -1) {
 			b.logger.Infof("backup: find %s, start", filepath)
 			file, _ := os.Open(filepath)
 			buf := bufio.NewReader(file)
