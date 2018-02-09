@@ -147,7 +147,7 @@ func (c *commit) Insert(s ...string) bool {
 	if c.timer == nil && c.config.MaxInterval > 0 {
 		c.timer = time.NewTimer(c.config.MaxInterval)
 		go func() {
-			defer c.logger.Info("timer exit")
+			defer c.logger.Tracef("timer exit")
 			time.Sleep(c.delay)
 			for !c.close {
 				select {
@@ -193,7 +193,7 @@ func (c *commit) Alive() bool {
 }
 
 func (c *commit) Close() int {
-	c.logger.Infof("stopping")
+	c.logger.Tracef("stopping")
 	c.close = true
 	c.Lock()
 	for len(c.thread) != 0 {
