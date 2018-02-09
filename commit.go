@@ -117,6 +117,7 @@ func (c *commit) commit() {
 		c.logger.Debugf("%s commit: submit %d, current threads %d", c.uuid, len(cache), len(c.thread))
 		go c.commitWithRetry(c.uuid, c.backup, 1, cache, c.config.Sql, c.config.Parser)
 	} else {
+		c.db.Ping()
 		c.logger.Tracef("%s commit: empty", c.uuid)
 	}
 
@@ -127,12 +128,18 @@ func (c *commit) commit() {
 }
 
 func (c *commit) Insert(s ...string) bool {
-	if c.close {
-		return false
-	}
 	c.Lock()
 	defer c.Unlock()
 	c.init()
+	if c.close {
+		if c.backup == nil {
+			writer := OpenWriter(c.config.BackUpPath, c.config.BackUpFilePrefix+"_"+c.uuid, "cache", 0)
+			c.backup = writer
+			c.logger.Tracef("insert closed, write to %s", c.backup.path)
+		}
+		c.backup.Flush(s...)
+		return false
+	}
 	if len(s) == 0 {
 		return true
 	}
