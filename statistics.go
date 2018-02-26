@@ -4,34 +4,62 @@ import (
 	"sync/atomic"
 	"time"
 	"sync"
+	"fmt"
 )
 
 type Statistics struct {
 	begin           time.Time
-	last 			time.Time
-	timer           *time.Ticker
-	num             int64
-	total           int64
 	rateLastSeconds int64
-	rateLastMinutes int64
-	rateLastHour    int64
-	history         map[int64]int64
+	total           int64
+
+	firstCommit time.Time
+	lastCommit  time.Time
+	totalCommit int64
+
+	timer *time.Ticker
 	sync.Mutex
 }
 
-func (s *Statistics) checkAndStart() {
+func (s *Statistics) insert(i int) {
+	if s.begin.IsZero() {
+		s.start()
+	}
+	atomic.AddInt64(&s.rateLastSeconds, int64(i))
+}
+
+func (s *Statistics) commit() {
+	if s.begin.IsZero() {
+		s.firstCommit = time.Now()
+	}
+	s.lastCommit = time.Now()
+	atomic.AddInt64(&s.totalCommit, 1)
+}
+
+func (s *Statistics) start() {
 	s.Lock()
 	defer s.Unlock()
+	s.begin = time.Now()
 	if s.timer == nil {
 		timer := time.NewTicker(time.Second)
 		go func() {
 			for {
 				select {
 				case <-timer.C:
-					//r.RatePerSecond = float64(s.num)
-					atomic.SwapInt64(&s.num, 0)
+					num := atomic.SwapInt64(&s.rateLastSeconds, 0)
+					atomic.AddInt64(&s.total, num)
 				}
 			}
 		}()
 	}
+}
+
+func (s *Statistics) Health() map[string]string {
+	m := make(map[string]string)
+	m["begin"] = s.begin.String()
+	m["firstCommit"] = s.firstCommit.String()
+	m["lastCommit"] = s.lastCommit.String()
+	m["totalCommit"] = fmt.Sprint(s.totalCommit)
+	m["totalInsert"] = fmt.Sprint(s.total)
+	m["lastSecondInsert"] = fmt.Sprint(s.rateLastSeconds)
+	return m
 }

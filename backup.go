@@ -5,6 +5,7 @@ import (
 	"os"
 	"fmt"
 	"path/filepath"
+	"container/list"
 )
 
 func OpenWriter(p string, prefix string, typ string, no int) *Writer {
@@ -36,6 +37,12 @@ type Writer struct {
 func (w *Writer) Flush(s ...string) {
 	for _, msg := range s {
 		w.file.Write([]byte(msg + "\n"))
+	}
+}
+
+func (w *Writer) FlushList(l *list.List) {
+	for e := l.Front(); e != nil; e = e.Next() {
+		w.file.Write([]byte(e.Value.(string) + "\n"))
 	}
 }
 

@@ -5,19 +5,12 @@ import (
 	"path/filepath"
 	"os"
 	"fmt"
-	"database/sql"
-	"sync"
 )
 
 const (
 	DisableBackUp = 0 //never do backup
 	CacheBackUp   = 1 //backup only system exits or commit failed
 	DiskBackUp    = 2 //backup every msg saved
-)
-
-var (
-	dbs  = make(map[string]*sql.DB)
-	lock sync.Mutex
 )
 
 //only check once
@@ -41,7 +34,7 @@ type Config struct {
 
 	WaitForOsKill      bool
 	MinAliveConnection int
-	CommitFailCallBack func(interface{})
+	CommitCallBack     func(ip string, dataSource string, uuid string, size int, retried int, err interface{})
 
 	EnableStatistics bool
 
@@ -112,6 +105,7 @@ func (config *Config) check() error {
 			BackUpFilePrefix:    config.BackUpFilePrefix,
 			WaitForOsKill:       config.WaitForOsKill,
 			EnableStatistics:    config.EnableStatistics,
+			CommitCallBack:      config.CommitCallBack,
 		}
 	}
 	return nil

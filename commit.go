@@ -2,6 +2,7 @@ package zysql
 
 import (
 	"time"
+	"container/list"
 	"database/sql"
 	"fmt"
 	"sync"
@@ -12,11 +13,13 @@ import (
 )
 
 type commit struct {
-	delay time.Duration
-	db    *sql.DB
-	close bool
+	father     *Insertion
+	ip         string
+	driver     string
+	dataSource string
+	close      bool
 
-	cache  []string
+	cache  *list.List
 	thread chan string
 	timer  *time.Timer
 	uuid   string
@@ -30,31 +33,51 @@ type commit struct {
 
 func (c *commit) init() {
 	if c.cache == nil {
-		c.cache = []string{}
+		c.cache = list.New()
 		uid, _ := uuid.NewV4()
 		c.uuid = uid.String()
 		c.thread = make(chan string, c.config.MaxThreads)
 	}
 }
 
-func (c *commit) commitWithRetry(uuid string, cacheBackUp *Writer, retry int, cache []string, insertSql string, parser func(s string) ([]interface{}, error)) {
-	var position string
+func (c *commit) Ping() error {
+	if db, err := GetDb(c.driver, c.dataSource); err != nil {
+		return err
+	} else {
+		return db.Ping()
+	}
+}
+
+func (c *commit) commitWithRetry(uuid string, cacheBackUp *Writer, retry int, cache *list.List, insertSql string, parser func(s string) ([]interface{}, error)) {
+	var (
+		position string
+		conn     *sql.DB
+		err      error
+		tx       *sql.Tx
+		stmt     *sql.Stmt
+		data     []interface{}
+		start    = time.Now()
+	)
 	defer func() {
-		if err := recover(); err != nil {
+		err := recover()
+		if c.config.CommitCallBack != nil {
+			c.config.CommitCallBack(c.ip, c.dataSource, uuid, cache.Len(), retry, err)
+		}
+		if stmt != nil {
+			stmt.Close()
+		}
+		if err != nil {
 			c.logger.Errorf("%s commit: %s failed: %s", uuid, position, err)
 			retry ++
 			if retry < int(c.config.MaxRetry) {
 				c.commitWithRetry(uuid, cacheBackUp, retry, cache, insertSql, parser)
 			} else {
 				<-c.thread
-				if c.config.CommitFailCallBack != nil {
-					c.config.CommitFailCallBack(err)
-				}
 				c.logger.Errorf("%s commit: failed %d times, dropping", uuid, retry)
 				if c.config.BackUpLevel == DiskBackUp {
 					writer := OpenWriter(c.config.BackUpPath, c.config.BackUpFilePrefix+"_"+c.uuid, "dump", 0)
 					c.logger.Infof("%s commit: backup in %s", uuid, writer.path)
-					writer.Flush(cache...)
+					writer.FlushList(cache)
 					writer.Close()
 				} else if c.config.BackUpLevel == CacheBackUp {
 					cacheBackUp.Rename(strings.Replace(cacheBackUp.path, ".cache", ".dump", -1))
@@ -63,42 +86,47 @@ func (c *commit) commitWithRetry(uuid string, cacheBackUp *Writer, retry int, ca
 					c.Close()
 				}
 			}
-		} else if c.config.BackUpLevel == CacheBackUp {
-			c.logger.Tracef("%s cache clear backup %s", uuid, cacheBackUp.path)
-			cacheBackUp.Clear()
+		} else {
+			c.logger.Tracef("%s commit: %dst time success(%s), current threads %d", uuid, retry, time.Since(start).String(), len(c.thread))
+			<-c.thread
+			c.stat.commit()
+			if c.config.BackUpLevel == CacheBackUp {
+				c.logger.Tracef("%s cache clear backup %s", uuid, cacheBackUp.path)
+				cacheBackUp.Clear()
+			}
 		}
 	}()
-	start := time.Now()
 	c.logger.Tracef("%s commit: %dst time start", uuid, retry)
-	tx, err := c.db.Begin()
+	conn, err = GetDb(c.driver, c.dataSource)
+	position = "GetDb()"
 	if err != nil {
-		position = "Begin()"
 		panic(err)
 	}
-
-	stmt, err := tx.Prepare(insertSql)
+	tx, err = conn.Begin()
+	position = "Begin()"
 	if err != nil {
-		position = "Prepare()"
 		panic(err)
 	}
-
-	for i, s := range cache {
-		if data, err := parser(s); err == nil {
-			if _, err2 := stmt.Exec(data...); err2 != nil {
-				position = fmt.Sprintf("Exec() at line %d", i+1)
-				panic(err2)
-			}
-		} else {
-			position = fmt.Sprintf("parser() at line %d", i+1)
+	stmt, err = tx.Prepare(insertSql)
+	position = "Prepare()"
+	if err != nil {
+		panic(err)
+	}
+	e := cache.Front()
+	for i := 0; e != nil; i++ {
+		position = fmt.Sprintf("parser() at line %d", i)
+		if data, err = parser(e.Value.(string)); err != nil {
+			panic(err)
+		} else if _, err = stmt.Exec(data...); err != nil {
+			position = fmt.Sprintf("Exec() at line %d", i)
 			panic(err)
 		}
+		e = e.Next()
 	}
-	if err := tx.Commit(); err != nil {
-		position = "Commit()"
+	position = "Commit()"
+	if err = tx.Commit(); err != nil {
 		panic(err)
 	}
-	c.logger.Tracef("%s commit: %dst time success(%s), current threads %d", uuid, retry, time.Since(start).String(), len(c.thread))
-	<-c.thread
 }
 
 func (c *commit) Commit() {
@@ -108,16 +136,14 @@ func (c *commit) Commit() {
 }
 
 func (c *commit) commit() {
+	c.father.next()
 	c.init()
-	if len(c.cache) > 0 {
-		cache := make([]string, len(c.cache))
-		copy(cache, c.cache)
-		c.cache = []string{}
+	if c.cache.Len() > 0 {
+		c.logger.Debugf("%s commit: submit %d, current threads %d", c.uuid, c.cache.Len(), len(c.thread))
+		go c.commitWithRetry(c.uuid, c.backup, 1, c.cache, c.config.Sql, c.config.Parser)
+		c.cache = list.New()
 		c.thread <- c.uuid
-		c.logger.Debugf("%s commit: submit %d, current threads %d", c.uuid, len(cache), len(c.thread))
-		go c.commitWithRetry(c.uuid, c.backup, 1, cache, c.config.Sql, c.config.Parser)
 	} else {
-		c.db.Ping()
 		c.logger.Tracef("%s commit: empty", c.uuid)
 	}
 
@@ -127,7 +153,7 @@ func (c *commit) commit() {
 	c.backup = nil
 }
 
-func (c *commit) Insert(s ...string) bool {
+func (c *commit) Insert(s string) bool {
 	c.Lock()
 	defer c.Unlock()
 	c.init()
@@ -137,29 +163,24 @@ func (c *commit) Insert(s ...string) bool {
 			c.backup = writer
 			c.logger.Tracef("insert closed, write to %s", c.backup.path)
 		}
-		c.backup.Flush(s...)
+		c.backup.Flush(s)
 		return false
 	}
 	if len(s) == 0 {
 		return true
 	}
-	size := len(c.cache)
 	if c.timer == nil && c.config.MaxInterval > 0 {
 		c.timer = time.NewTimer(c.config.MaxInterval)
 		go func() {
 			defer c.logger.Tracef("timer exit")
-			time.Sleep(c.delay)
 			for !c.close {
-				select {
-				case <-c.timer.C:
-					c.logger.Tracef("%s commit: reach MaxInterval", c.uuid)
-					c.Commit()
-				default:
-				}
+				<-c.timer.C
+				c.logger.Tracef("%s commit: reach MaxInterval", c.uuid)
+				c.Commit()
 			}
 		}()
 		c.logger.Infof("%s commit: init timer", c.uuid)
-	} else if size == 0 {
+	} else if c.cache.Len() == 0 {
 		//reset timer
 		c.timer.Stop()
 		success := !c.timer.Reset(c.config.MaxInterval)
@@ -168,21 +189,21 @@ func (c *commit) Insert(s ...string) bool {
 
 	if c.config.BackUpLevel == CacheBackUp {
 		if c.backup == nil {
-			writer := OpenWriter(c.config.BackUpPath, c.config.BackUpFilePrefix+"_"+c.uuid, "cache", 0)
-			c.backup = writer
+			c.backup = OpenWriter(c.config.BackUpPath, c.config.BackUpFilePrefix+"_"+c.uuid, "cache", 0)
 			c.logger.Tracef("%s cache open backup %s", c.uuid, c.backup.path)
 		}
-		c.backup.Flush(s...)
+		c.backup.Flush(s)
 	}
-	c.cache = append(c.cache, s...)
+	c.cache.PushBack(s)
 
-	if uint(size) > c.config.MaxBatchSize {
+	if uint(c.cache.Len()) > c.config.MaxBatchSize {
 		c.logger.Tracef("%s commit: reach MaxBatchSize", c.uuid)
 		//stop timer
 		if c.timer.Stop() {
 			c.commit()
 		}
 	}
+	c.stat.insert(1)
 	return true
 }
 
@@ -194,18 +215,18 @@ func (c *commit) Alive() bool {
 
 func (c *commit) Close() int {
 	c.logger.Tracef("stopping")
-	c.close = true
 	c.Lock()
+	c.close = true
 	for len(c.thread) != 0 {
 		c.logger.Infof("stopped, %d commit left", len(c.thread))
 		time.Sleep(time.Second)
 	}
 	if c.timer != nil {
 		if c.timer.Stop() {
-			c.commit()
+			c.timer.Reset(1)
 		}
 	}
 	c.Unlock()
-	c.logger.Infof("stopped")
+	c.logger.Infof("stopped\n" + c.stat.Health())
 	return 1
 }

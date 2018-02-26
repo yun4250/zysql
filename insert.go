@@ -2,19 +2,16 @@ package zysql
 
 import (
 	"sync"
-	"fmt"
 	"github.com/zyfcn/zyLog"
 	"bufio"
 	"os"
 	"path/filepath"
 	"io"
 	"strings"
-	"database/sql"
 	"syscall"
 	"os/signal"
 	"errors"
 	"math/rand"
-	"time"
 )
 
 var ErrLessConnection = errors.New("reach MinAliveConnection")
@@ -72,85 +69,48 @@ func (i *Insertion) close() {
 func (b *Insertion) init() error {
 	if b.committer == nil {
 		b.committer = []*commit{}
-		lock.Lock()
 		for _, ip := range b.config.Ip {
-			key := fmt.Sprintf("%s-%s:%d-%s", b.config.DriverName, ip, b.config.Port, b.config.DataBase)
-			var db *sql.DB
-			if v, ok := dbs[key]; ok{
-				if err := v.Ping(); err == nil {
-					db = v
-				}else{
-					host := b.config.DataSourceGenerator(ip, b.config.Port, b.config.DataBase)
-					if connect, err := sql.Open(b.config.DriverName, host); err != nil {
-						b.logger.Errorf("fail to open DB: %s - %s", host, err.Error())
-						continue
-					} else {
-						dbs[key] = connect
-						db = connect
-					}
-				}
-			} else {
-				host := b.config.DataSourceGenerator(ip, b.config.Port, b.config.DataBase)
-				if connect, err := sql.Open(b.config.DriverName, host); err != nil {
-					b.logger.Errorf("fail to open DB: %s - %s", host, err.Error())
-					continue
-				} else {
-					dbs[key] = connect
-					db = connect
-				}
-			}
-			if err := db.Ping(); err == nil {
-				b.logger.Infof("connect %s success", ip)
-			} else {
-				b.logger.Errorf("fail to ping %s: %s", ip, err.Error())
-				continue
-			}
-			c := &commit{
-				delay:  time.Duration(b.config.MaxInterval.Nanoseconds() / int64(len(b.config.Ip)) * int64((len(b.committer))-1)),
-				db:     db,
-				config: b.config,
-				logger: b.logger.Position(ip),
-			}
-			b.committer = append(b.committer, c)
+			b.committer = append(b.committer, &commit{
+				father:     b,
+				driver:     b.config.DriverName,
+				dataSource: b.config.DataSourceGenerator(ip, b.config.Port, b.config.DataBase),
+				config:     b.config,
+				ip:         ip,
+				logger:     b.logger.Position(ip),
+			})
 		}
-		if len(b.committer) <= b.config.MinAliveConnection {
-			return ErrLessConnection
-		}
-		lock.Unlock()
+		b.index = rand.Intn(len(b.config.Ip))
+		b.logger.Infof("Insertion init, starts with %s", b.config.Ip[b.index])
 	}
 	return nil
 }
 
-func (b *Insertion) Insert(s ...string) error {
+func (b *Insertion) Insert(s string) error {
 	b.Lock()
 	defer b.Unlock()
 	if err := b.init(); err != nil {
 		return err
 	}
-	for i, ss := range s {
-		for !b.next().Insert(ss) {
-			b.logger.Errorf("committer: %d already closed")
-			if err := b.CleanDied(); err != nil {
-				writer := OpenWriter(b.config.BackUpPath, b.config.BackUpFilePrefix+"_"+fmt.Sprintf("%d", rand.Int()), "dump", 0)
-				b.logger.Infof("backup: save died msg in %s", writer.path)
-				writer.Flush(s[i:]...)
-				writer.Close()
-				return err
-			}
-		}
+	if !b.committer[b.index].Insert(s) {
+		b.logger.Errorf("committer: %d already closed")
+		return b.cleanDied()
 	}
 	return nil
 }
 
-func (b *Insertion) CleanDied() error {
+func (b *Insertion) cleanDied() error {
+	b.logger.Info("clean started")
 	b.index = 0
 	alive := []*commit{}
 	for _, v := range b.committer {
 		if v.Alive() {
 			alive = append(alive, v)
+		} else if v.backup != nil {
+			v.backup.Close()
 		}
 	}
 	if len(alive) <= b.config.MinAliveConnection {
+		b.logger.Errorf("alive client less than %d",b.config.MinAliveConnection)
 		return ErrLessConnection
 	} else {
 		b.committer = alive
@@ -158,9 +118,10 @@ func (b *Insertion) CleanDied() error {
 	}
 }
 
-func (b *Insertion) next() *commit {
+func (b *Insertion) next() {
+	b.Lock()
+	defer b.Unlock()
 	b.index = (b.index + 1) % len(b.committer)
-	return b.committer[b.index]
 }
 
 func (b *Insertion) LoadBackUp(includeCache bool) {
@@ -174,7 +135,7 @@ func (b *Insertion) LoadBackUp(includeCache bool) {
 			strings.Index(fi.Name(), b.config.BackUpFilePrefix+"_"),
 			strings.Index(fi.Name(), ".dump"),
 			strings.Index(fi.Name(), ".cache");
-			start != -1 && end != -1 || (includeCache && cache != -1) {
+			start != -1 && end != -1 && (includeCache && cache != -1) {
 			b.logger.Infof("backup: find %s, start", filepath)
 			file, _ := os.Open(filepath)
 			buf := bufio.NewReader(file)
