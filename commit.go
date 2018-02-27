@@ -27,7 +27,7 @@ type commit struct {
 
 	config *Config
 	logger *zylog.ChildLogger
-	stat   Statistics
+	stat   *Statistics
 	sync.Mutex
 }
 
@@ -135,6 +135,10 @@ func (c *commit) Commit() {
 	c.commit()
 }
 
+func (c *commit) Ip() string{
+	return c.ip
+}
+
 func (c *commit) commit() {
 	c.father.next()
 	c.init()
@@ -179,7 +183,7 @@ func (c *commit) Insert(s string) bool {
 				c.Commit()
 			}
 		}()
-		c.logger.Infof("%s commit: init timer", c.uuid)
+		c.logger.Infof("timer init")
 	} else if c.cache.Len() == 0 {
 		//reset timer
 		c.timer.Stop()
@@ -227,6 +231,10 @@ func (c *commit) Close() int {
 		}
 	}
 	c.Unlock()
-	c.logger.Infof("stopped\n" + c.stat.Health())
+	c.logger.Infof("committer stopped, %d batches(%d items) has been insert\n", c.stat.totalCommit, c.stat.total)
 	return 1
+}
+
+func (c *commit) Stat() *Statistics{
+	return c.stat
 }

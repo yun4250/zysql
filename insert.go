@@ -23,9 +23,10 @@ func NewInsertion(logger *zylog.ZyLogger, config Config, sql string, parser func
 		return nil, err
 	}
 	b := &Insertion{
-		config: config.config,
+		config: config.copy(),
 		logger: logger.GetChild("insertion"),
 	}
+	Insertions = append(Insertions, b)
 	if b.config.WaitForOsKill {
 		b.signal = make(chan os.Signal, 1)
 		signal.Notify(b.signal, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
@@ -42,6 +43,7 @@ type Insertion struct {
 	committer []*commit
 	logger    *zylog.ChildLogger
 	signal    chan os.Signal
+	closed    bool
 
 	config *Config
 	sync.Mutex
@@ -77,6 +79,7 @@ func (b *Insertion) init() error {
 				config:     b.config,
 				ip:         ip,
 				logger:     b.logger.Position(ip),
+				stat:       &Statistics{},
 			})
 		}
 		b.index = rand.Intn(len(b.config.Ip))
@@ -88,7 +91,7 @@ func (b *Insertion) init() error {
 func (b *Insertion) Insert(s string) error {
 	b.Lock()
 	defer b.Unlock()
-	if err := b.init(); err != nil {
+	if err := b.init(); err != nil && b.closed == false {
 		return err
 	}
 	if !b.committer[b.index].Insert(s) {
@@ -96,6 +99,10 @@ func (b *Insertion) Insert(s string) error {
 		return b.cleanDied()
 	}
 	return nil
+}
+
+func (b *Insertion) Committers() []*commit {
+	return b.committer
 }
 
 func (b *Insertion) cleanDied() error {
@@ -110,7 +117,7 @@ func (b *Insertion) cleanDied() error {
 		}
 	}
 	if len(alive) <= b.config.MinAliveConnection {
-		b.logger.Errorf("alive client less than %d",b.config.MinAliveConnection)
+		b.logger.Errorf("alive client less than %d", b.config.MinAliveConnection)
 		return ErrLessConnection
 	} else {
 		b.committer = alive
@@ -121,7 +128,12 @@ func (b *Insertion) cleanDied() error {
 func (b *Insertion) next() {
 	b.Lock()
 	defer b.Unlock()
-	b.index = (b.index + 1) % len(b.committer)
+	if len(b.committer) != 0 {
+		b.index = (b.index + 1) % len(b.committer)
+	} else {
+		b.logger.Errorf("no committers to use, insertion has been closed")
+		b.closed = true
+	}
 }
 
 func (b *Insertion) LoadBackUp(includeCache bool) {
@@ -135,7 +147,7 @@ func (b *Insertion) LoadBackUp(includeCache bool) {
 			strings.Index(fi.Name(), b.config.BackUpFilePrefix+"_"),
 			strings.Index(fi.Name(), ".dump"),
 			strings.Index(fi.Name(), ".cache");
-			start != -1 && end != -1 && (includeCache && cache != -1) {
+			start != -1 && (end != -1 || (includeCache && cache != -1)) {
 			b.logger.Infof("backup: find %s, start", filepath)
 			file, _ := os.Open(filepath)
 			buf := bufio.NewReader(file)
@@ -162,4 +174,8 @@ func (b *Insertion) LoadBackUp(includeCache bool) {
 	} else {
 		b.logger.Infof("walk backup %s success", b.config.BackUpPath)
 	}
+}
+
+func (b *Insertion) ReadConfig() *Config {
+	return b.config.copy()
 }

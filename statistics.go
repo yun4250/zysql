@@ -12,7 +12,6 @@ type Statistics struct {
 	rateLastSeconds int64
 	total           int64
 
-	firstCommit time.Time
 	lastCommit  time.Time
 	totalCommit int64
 
@@ -28,9 +27,6 @@ func (s *Statistics) insert(i int) {
 }
 
 func (s *Statistics) commit() {
-	if s.begin.IsZero() {
-		s.firstCommit = time.Now()
-	}
 	s.lastCommit = time.Now()
 	atomic.AddInt64(&s.totalCommit, 1)
 }
@@ -56,8 +52,7 @@ func (s *Statistics) start() {
 func (s *Statistics) Health() map[string]string {
 	m := make(map[string]string)
 	m["begin"] = s.begin.String()
-	m["firstCommit"] = s.firstCommit.String()
-	m["lastCommit"] = s.lastCommit.String()
+	m["lastCommit"] = s.lastCommit.Format("2006-01-02 15-04-05.000")
 	m["totalCommit"] = fmt.Sprint(s.totalCommit)
 	m["totalInsert"] = fmt.Sprint(s.total)
 	m["lastSecondInsert"] = fmt.Sprint(s.rateLastSeconds)

@@ -9,6 +9,7 @@ import (
 
 var (
 	dbs  = make(map[string]map[string]*sql.DB)
+	Insertions = []*Insertion{}
 	lock sync.Mutex
 )
 
@@ -30,11 +31,10 @@ func GetDb(driver string, dataSource string) (*sql.DB, error) {
 		dbs[driver] = make(map[string]*sql.DB)
 	}
 	if db, _ := dbs[driver][dataSource]; db == nil {
+		zylog.PrintDebug("%s %s :not find\n", driver, dataSource)
 		return newDb(driver, dataSource)
-	} else if err := db.Ping(); err == nil {
-		return db, nil
 	} else {
-		return newDb(driver, dataSource)
+		return db, nil
 	}
 }
 
@@ -44,7 +44,7 @@ func newDb(driver string, dataSource string) (*sql.DB, error) {
 	} else if err = connect.Ping(); err != nil {
 		return nil, err
 	} else {
-		zylog.Print("init sql.DB %s %s\n", driver, dataSource)
+		zylog.PrintDebug("%s %s :init sql.DB\n", driver, dataSource)
 		dbs[driver][dataSource] = connect
 		return connect, nil
 	}
